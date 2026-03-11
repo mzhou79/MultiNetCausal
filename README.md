@@ -6,8 +6,8 @@ This repository provides the code that can reproduce the simulation results in t
 
 ## Code
 
-- `Code/Setting1.R`: includes function and data generating process to reproduce setting 1.
+- `Setting1.R`: includes function and data generating process to reproduce setting 1.
 
-- `Code/Setting2.R`: includes function and data generating process to reproduce setting 2.
+- `Setting2.R`: includes function and data generating process to reproduce setting 2.
 
-- `Code/uconnect.R`: includes the code for data cleaning, network visulization, and the application to uConnect Study.
+- `uconnect.R`: includes the code for data cleaning, network visulization, and the application to uConnect Study.
