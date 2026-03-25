@@ -432,9 +432,9 @@ run_simulation_setting2_parallel <- function(
 # =============================================================================
 
 # Same parameters as Setting 1
-params   <- list(beta0=-1, beta1=0.5, beta2=0.3, beta3=0.4, beta4=0.2, theta=0.3)
-params_A <- list(gamma0=0, gamma1=0.3, gamma2=0.2, psi=0.4)
-params_L <- list(alpha=-0.5, omega=0.4)
+params   <- list(beta0=-1, beta1=0.5, beta2=0.3, beta3=1.2, beta4=0.8, theta=0.6)
+params_A <- list(gamma0=0, gamma1=0.3, gamma2=0.8, psi=0.7)
+params_L <- list(alpha=-0.5, omega=0.6)
 
 results_s2 <- run_simulation_setting2_parallel(
   n_sim             = 500,
