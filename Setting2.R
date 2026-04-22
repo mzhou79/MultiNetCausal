@@ -1,20 +1,27 @@
 ###############################################################################
-# SETTING 2 — MISSPECIFICATION STUDY
-# Truth generated from Chain Graph (c); Gibbs samplers fit CG(a) and CG(b).
-
-# For each misspecified sampler we report bias, empirical SE, and 95% Wald-CI
-# coverage across 500 independent runs.
+# SETTING 2 — MISSPECIFICATION STUDY, N = 20
+# Truth generated from Chain Graph (c) (5 independent 4-unit blocks);
+# Gibbs samplers fit CG(a) and CG(b).
 ###############################################################################
+
+## ============================================================================
+## NETWORK SIZE
+## ============================================================================
+
+n_blocks   <- 5L
+block_size <- 4L
+N          <- n_blocks * block_size   # 20
+in_block   <- matrix(1:N, nrow = block_size)  # columns = block IDs
+local_pos  <- rep(1:block_size, times = n_blocks)
 
 ## ============================================================================
 ## SHARED PARAMETERS (paper Section 4.1)
 ## ============================================================================
 
-N <- 4L
-beta0 <- -1.0; beta1 <- 0.5; beta2 <- 0.3; beta3 <- 1.2; beta4 <- 0.8
-theta <- 0.6
+beta0 <- -1.0; beta1 <- 0.5; beta2 <- 0.3; beta3 <- 0.85; beta4 <- 0.55
+theta <- 0.42
 eta   <- -0.5
-omega <-  0.6
+omega <-  0.42
 alpha <- 0.5
 
 n_iter  <- 5000L
@@ -23,45 +30,40 @@ n_runs  <- 500L
 
 logistic <- function(x) 1 / (1 + exp(-x))
 
-all_cfg   <- as.matrix(expand.grid(rep(list(0:1), N))); colnames(all_cfg) <- paste0("v", 1:N)
-all_A     <- as.matrix(expand.grid(rep(list(0:1), N)))
-all_A_key <- apply(all_A, 1, function(r) paste0(r, collapse = ""))
-other_cfg <- as.matrix(expand.grid(rep(list(0:1), N - 1)))
+# All 2^4 configs of a block, and 2^3 "other" configs
+block_cfg <- as.matrix(expand.grid(rep(list(0:1), block_size)))
+colnames(block_cfg) <- paste0("v", 1:block_size)
+other_cfg <- as.matrix(expand.grid(rep(list(0:1), block_size - 1)))
 
 ## ============================================================================
-## NETWORK SPECIFICATIONS
+## WITHIN-BLOCK NETWORK SPECIFICATIONS
 ## ============================================================================
-#
-# Each spec has:
-#   nbr_dep   : dependence neighbors per unit (governs L-L, Y-Y in conditionals)
-#   edges_dep : undirected dependence edges (i, j with i<j)
-#   nbr_int   : interference neighbors per unit (governs β3, β4 terms in Y)
 
 specs <- list(
   CGa = list(
-    nbr_dep   = list(2L, c(1L, 3L), c(2L, 4L), 3L),       # chain
+    nbr_dep   = list(2L, c(1L, 3L), c(2L, 4L), 3L),
     edges_dep = list(c(1L, 2L), c(2L, 3L), c(3L, 4L)),
-    nbr_int   = list(2L, c(1L, 3L), c(2L, 4L), 3L)        # chain interference
+    nbr_int   = list(2L, c(1L, 3L), c(2L, 4L), 3L)
   ),
   CGb = list(
-    nbr_dep   = list(2L, 1L, 4L, 3L),                     # pairs
+    nbr_dep   = list(2L, 1L, 4L, 3L),
     edges_dep = list(c(1L, 2L), c(3L, 4L)),
-    nbr_int   = list(2L, 1L, 4L, 3L)                      # pair interference
+    nbr_int   = list(2L, 1L, 4L, 3L)
   ),
   CGc = list(
-    nbr_dep   = list(2L, c(1L, 3L), c(2L, 4L), 3L),       # chain dependence
+    nbr_dep   = list(2L, c(1L, 3L), c(2L, 4L), 3L),
     edges_dep = list(c(1L, 2L), c(2L, 3L), c(3L, 4L)),
-    nbr_int   = list(2L, 1L, 4L, 3L)                      # pair interference
+    nbr_int   = list(2L, 1L, 4L, 3L)
   )
 )
 
 build_weights <- function(spec) {
-  W_int <- matrix(0, N, N)
-  for (i in 1:N) {
+  W_int <- matrix(0, block_size, block_size)
+  for (i in 1:block_size) {
     nb <- spec$nbr_int[[i]]
     if (length(nb) > 0) W_int[i, nb] <- 1 / length(nb)
   }
-  wY <- matrix(0, N, N)
+  wY <- matrix(0, block_size, block_size)
   for (e in spec$edges_dep) {
     wY[e[1], e[2]] <- 0.5
     wY[e[2], e[1]] <- 0.5
@@ -70,7 +72,7 @@ build_weights <- function(spec) {
 }
 
 ## ============================================================================
-## EXACT (ANALYTICAL) COMPONENTS — parameterized by spec
+## EXACT (ANALYTICAL) COMPONENTS — PER BLOCK
 ## ============================================================================
 
 make_exact_funcs <- function(spec, weights) {
@@ -82,7 +84,7 @@ make_exact_funcs <- function(spec, weights) {
     s
   }
   exact_fL <- function() {
-    u <- apply(all_cfg, 1, U_L); u <- u - max(u)
+    u <- apply(block_cfg, 1, U_L); u <- u - max(u)
     p <- exp(u); p / sum(p)
   }
   G_i <- function(i, a, l) {
@@ -93,7 +95,7 @@ make_exact_funcs <- function(spec, weights) {
   }
   U_Y <- function(y, a, l) {
     s <- 0
-    for (i in 1:N) s <- s + y[i] * G_i(i, a, l)
+    for (i in 1:block_size) s <- s + y[i] * G_i(i, a, l)
     for (e in spec$edges_dep) {
       i <- e[1]; j <- e[2]
       s <- s + y[i] * y[j] * theta * wY[i, j]
@@ -101,15 +103,15 @@ make_exact_funcs <- function(spec, weights) {
     s
   }
   exact_marg_Y <- function(i, a, l) {
-    u <- apply(all_cfg, 1, function(y) U_Y(y, a, l))
+    u <- apply(block_cfg, 1, function(y) U_Y(y, a, l))
     u <- u - max(u)
     p <- exp(u); p <- p / sum(p)
-    sum(p[all_cfg[, i] == 1])
+    sum(p[block_cfg[, i] == 1])
   }
   exact_psi <- function(i, a) {
     pL <- exact_fL(); out <- 0
-    for (k in seq_len(nrow(all_cfg))) {
-      l <- as.integer(all_cfg[k, ])
+    for (k in seq_len(nrow(block_cfg))) {
+      l <- as.integer(block_cfg[k, ])
       out <- out + pL[k] * exact_marg_Y(i, a, l)
     }
     out
@@ -118,14 +120,14 @@ make_exact_funcs <- function(spec, weights) {
 }
 
 compute_truth <- function(exact_psi) {
-  psi_0 <- sapply(1:N, function(i) exact_psi(i, rep(0L, N)))
-  DE_i <- numeric(N); IE_i <- numeric(N)
-  for (i in 1:N) {
+  psi_0 <- sapply(1:block_size, function(i) exact_psi(i, rep(0L, block_size)))
+  DE_i <- numeric(block_size); IE_i <- numeric(block_size)
+  for (i in 1:block_size) {
     for (k in seq_len(nrow(other_cfg))) {
       a_mi <- as.integer(other_cfg[k, ])
-      pa <- alpha^sum(a_mi) * (1 - alpha)^(N - 1 - sum(a_mi))
-      a1 <- integer(N); a0 <- integer(N); idx <- 1L
-      for (j in 1:N) {
+      pa <- alpha^sum(a_mi) * (1 - alpha)^(block_size - 1 - sum(a_mi))
+      a1 <- integer(block_size); a0 <- integer(block_size); idx <- 1L
+      for (j in 1:block_size) {
         if (j != i) { a1[j] <- a_mi[idx]; a0[j] <- a_mi[idx]; idx <- idx + 1L }
       }
       a1[i] <- 1L; a0[i] <- 0L
@@ -139,29 +141,48 @@ compute_truth <- function(exact_psi) {
 }
 
 ## ============================================================================
-## GIBBS SAMPLER — parameterized by spec
+## GIBBS SAMPLER — N = 20
 ## ============================================================================
 
 make_gibbs_psi <- function(spec, weights) {
   W_int <- weights$W_int; wY <- weights$wY
+
+  # Global-index neighbor lists
+  global_nbr_dep <- vector("list", N)
+  global_nbr_int <- vector("list", N)
+  for (b in 1:n_blocks) {
+    for (lp in 1:block_size) {
+      u  <- in_block[lp, b]
+      nd <- spec$nbr_dep[[lp]]
+      ni <- spec$nbr_int[[lp]]
+      global_nbr_dep[[u]] <- if (length(nd) > 0) in_block[nd, b] else integer(0)
+      global_nbr_int[[u]] <- if (length(ni) > 0) in_block[ni, b] else integer(0)
+    }
+  }
+
   function(a_alloc, n_iter, burn_in, seed) {
     set.seed(seed)
     L <- integer(N); Y <- integer(N)
     acc <- numeric(N); kept <- 0L
     for (m in 1:n_iter) {
-      for (i in 1:N) {
-        nb_dep <- spec$nbr_dep[[i]]
-        nb_int <- spec$nbr_int[[i]]
+      for (u in 1:N) {
+        lp_u      <- local_pos[u]
+        nb_dep    <- global_nbr_dep[[u]]
+        nb_int    <- global_nbr_int[[u]]
+        nb_dep_lp <- local_pos[nb_dep]
+        nb_int_lp <- local_pos[nb_int]
+
         # L update
         p_L <- logistic(eta + omega * sum(L[nb_dep]))
-        L[i] <- as.integer(runif(1) < p_L)
+        L[u] <- as.integer(runif(1) < p_L)
+
         # Y update
-        lin <- beta0 + beta1 * a_alloc[i] + beta2 * L[i] +
-          beta3 * sum(W_int[i, nb_int] * a_alloc[nb_int]) +
-          beta4 * sum(W_int[i, nb_int] * L[nb_int]) +
-          sum(wY[i, nb_dep] * theta * Y[nb_dep])
+        lin <- beta0 + beta1 * a_alloc[u] + beta2 * L[u] +
+          beta3 * sum(W_int[lp_u, nb_int_lp] * a_alloc[nb_int]) +
+          beta4 * sum(W_int[lp_u, nb_int_lp] * L[nb_int]) +
+          sum(wY[lp_u, nb_dep_lp] * theta * Y[nb_dep])
         p_Y <- logistic(lin)
-        Y[i] <- as.integer(runif(1) < p_Y)
+        Y[u] <- as.integer(runif(1) < p_Y)
       }
       if (m > burn_in) { acc <- acc + Y; kept <- kept + 1L }
     }
@@ -170,31 +191,42 @@ make_gibbs_psi <- function(spec, weights) {
 }
 
 ## ============================================================================
-## ONE REPLICATE
+## ONE REPLICATE — 16 chains per replicate using block replication
 ## ============================================================================
 
 make_one_replicate <- function(gibbs_psi) {
   function(run_id) {
     base_seed <- 10000L + run_id * 100L
-    psi_tbl <- matrix(NA_real_, nrow = nrow(all_A), ncol = N)
-    rownames(psi_tbl) <- all_A_key
-    for (k in seq_len(nrow(all_A))) {
-      a_vec <- as.integer(all_A[k, ])
-      psi_tbl[k, ] <- gibbs_psi(a_vec, n_iter, burn_in, seed = base_seed + k)
+    psi_tbl <- matrix(NA_real_, nrow = nrow(block_cfg), ncol = block_size)
+    for (k in seq_len(nrow(block_cfg))) {
+      local_a  <- as.integer(block_cfg[k, ])
+      a_vec    <- rep(local_a, times = n_blocks)  # length 20
+      psi_full <- gibbs_psi(a_vec, n_iter, burn_in, seed = base_seed + k)
+      for (lp in 1:block_size) {
+        psi_tbl[k, lp] <- mean(psi_full[in_block[lp, ]])
+      }
     }
-    psi0_key <- paste0(rep(0L, N), collapse = "")
-    DE_i <- numeric(N); IE_i <- numeric(N)
-    for (i in 1:N) {
-      psi_base <- psi_tbl[psi0_key, i]
+
+    # Build DE_i, IE_i using block_cfg lookup
+    key_fn   <- function(v) paste0(v, collapse = "")
+    cfg_keys <- apply(block_cfg, 1, key_fn)
+    psi0_row <- which(cfg_keys == key_fn(rep(0L, block_size)))
+
+    DE_i <- numeric(block_size); IE_i <- numeric(block_size)
+    for (i in 1:block_size) {
+      psi_base <- psi_tbl[psi0_row, i]
       for (k in seq_len(nrow(other_cfg))) {
         a_mi <- as.integer(other_cfg[k, ])
-        pa <- alpha^sum(a_mi) * (1 - alpha)^(N - 1 - sum(a_mi))
-        a1 <- integer(N); a0 <- integer(N); idx <- 1L
-        for (j in 1:N) if (j != i) { a1[j] <- a_mi[idx]; a0[j] <- a_mi[idx]; idx <- idx + 1L }
+        pa <- alpha^sum(a_mi) * (1 - alpha)^(block_size - 1 - sum(a_mi))
+        a1 <- integer(block_size); a0 <- integer(block_size); idx <- 1L
+        for (j in 1:block_size) if (j != i) {
+          a1[j] <- a_mi[idx]; a0[j] <- a_mi[idx]; idx <- idx + 1L
+        }
         a1[i] <- 1L; a0[i] <- 0L
-        k1 <- paste0(a1, collapse = ""); k0 <- paste0(a0, collapse = "")
-        DE_i[i] <- DE_i[i] + pa * (psi_tbl[k1, i] - psi_tbl[k0, i])
-        IE_i[i] <- IE_i[i] + pa * (psi_tbl[k0, i] - psi_base)
+        r1 <- which(cfg_keys == key_fn(a1))
+        r0 <- which(cfg_keys == key_fn(a0))
+        DE_i[i] <- DE_i[i] + pa * (psi_tbl[r1, i] - psi_tbl[r0, i])
+        IE_i[i] <- IE_i[i] + pa * (psi_tbl[r0, i] - psi_base)
       }
     }
     ATE_i <- DE_i + IE_i
@@ -203,11 +235,12 @@ make_one_replicate <- function(gibbs_psi) {
 }
 
 ## ============================================================================
-## TRUTH UNDER CG(c)  —  computed once
+## TRUTH UNDER CG(c) — computed once
 ## ============================================================================
 
 cat("==================================================\n")
-cat("=== Computing analytical truth under CG(c) ===\n")
+cat(sprintf("=== Truth under CG(c)  (N = %d, %d × %d blocks)\n",
+            N, n_blocks, block_size))
 cat("==================================================\n")
 truth_spec    <- specs$CGc
 truth_weights <- build_weights(truth_spec)
@@ -218,7 +251,7 @@ cat(sprintf("  IE_true  = %+.6f\n", truth$IE))
 cat(sprintf("  ATE_true = %+.6f\n\n", truth$ATE))
 
 ## ============================================================================
-## RUN A MISSPECIFIED SAMPLER AGAINST CG(c) TRUTH
+## RUN A MISSPECIFIED SAMPLER
 ## ============================================================================
 
 run_misspec <- function(fit_model_name, truth) {
@@ -243,11 +276,12 @@ run_misspec <- function(fit_model_name, truth) {
   } else {
     cl <- makeCluster(n_cores)
     clusterExport(cl,
-                  varlist = c("N", "spec", "weights",
+                  varlist = c("N", "n_blocks", "block_size", "in_block", "local_pos",
+                              "spec", "weights",
                               "beta0", "beta1", "beta2", "beta3", "beta4",
                               "theta", "eta", "omega", "alpha",
                               "n_iter", "burn_in",
-                              "all_A", "all_A_key", "other_cfg",
+                              "block_cfg", "other_cfg",
                               "logistic", "gibbs_psi", "one_replicate"),
                   envir = environment())
     results_list <- parLapply(cl, 1:n_runs, one_replicate)
@@ -290,7 +324,7 @@ for (m in c("CGa", "CGb")) {
 }
 
 cat("==================================================\n")
-cat("=========  SETTING 2 — COMBINED SUMMARY  =========\n")
+cat("======  SETTING 2 (N=20) COMBINED SUMMARY  =======\n")
 cat("===  Truth = CG(c); rows show fit model         ===\n")
 cat("==================================================\n")
 combined <- do.call(rbind, lapply(all_results, function(x) x$summary))
