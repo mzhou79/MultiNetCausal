@@ -1,16 +1,22 @@
 ###############################################################################
 # SETTING 1 — CORRECT SPECIFICATION, N = 20
+# For each of CG(a), CG(b), CG(c):
+#   - Compute analytical truth under that model
+#   - Fit the same model via Gibbs + K=50 sampled allocations
+#   - Compare estimates to truth across 100 replicates
 ###############################################################################
+
+library(parallel)
 
 ## ============================================================================
 ## NETWORK SIZE
 ## ============================================================================
 
-n_blocks    <- 5L
-block_size  <- 4L
-N           <- n_blocks * block_size   # 20
-block_of    <- rep(1:n_blocks, each = block_size)    # length-20 block label
-in_block    <- matrix(1:N, nrow = block_size)        # columns = block IDs
+n_blocks   <- 5L
+block_size <- 4L
+N          <- n_blocks * block_size   # 20
+in_block   <- matrix(1:N, nrow = block_size)  # columns = block IDs
+local_pos  <- rep(1:block_size, times = n_blocks)
 
 ## ============================================================================
 ## SHARED PARAMETERS (paper Section 4.1)
@@ -22,17 +28,16 @@ eta   <- -0.5
 omega <-  0.42
 alpha <- 0.5
 
-n_iter  <- 5000L
-burn_in <- 1000L
-n_runs  <- 500L
+n_iter  <- 2000L
+burn_in <- 500L
+n_runs  <- 200L
+K_alloc <- 50L
 
 logistic <- function(x) 1 / (1 + exp(-x))
 
-# All 2^4 configurations of a 4-unit binary vector — used for per-block work
+# All 2^4 block configs (used only for exact-truth computation)
 block_cfg <- as.matrix(expand.grid(rep(list(0:1), block_size)))
 colnames(block_cfg) <- paste0("v", 1:block_size)
-
-# 2^3 configs of the 3 other units in a block (for DE/IE marginalization)
 other_cfg <- as.matrix(expand.grid(rep(list(0:1), block_size - 1)))
 
 ## ============================================================================
@@ -72,7 +77,7 @@ build_weights <- function(spec) {
 }
 
 ## ============================================================================
-## EXACT (ANALYTICAL) COMPONENTS — PER BLOCK
+## EXACT (ANALYTICAL) TRUTH — PER BLOCK
 ## ============================================================================
 
 make_exact_funcs <- function(spec, weights) {
@@ -108,7 +113,6 @@ make_exact_funcs <- function(spec, weights) {
     p <- exp(u); p <- p / sum(p)
     sum(p[block_cfg[, i] == 1])
   }
-  # ψ_i(a) for a WITHIN-BLOCK allocation a (length 4)
   exact_psi <- function(i, a) {
     pL <- exact_fL(); out <- 0
     for (k in seq_len(nrow(block_cfg))) {
@@ -120,15 +124,12 @@ make_exact_funcs <- function(spec, weights) {
   list(exact_psi = exact_psi)
 }
 
-# Network-level truth using within-block computation.
 compute_truth <- function(exact_psi) {
   psi_0 <- sapply(1:block_size, function(i) exact_psi(i, rep(0L, block_size)))
   DE_i <- numeric(block_size); IE_i <- numeric(block_size)
   for (i in 1:block_size) {
     for (k in seq_len(nrow(other_cfg))) {
       a_mi <- as.integer(other_cfg[k, ])
-      # Within-block: there are block_size - 1 = 3 other units in i's block.
-      # The allocation-regime weight for those 3 units is binomial(alpha).
       pa <- alpha^sum(a_mi) * (1 - alpha)^(block_size - 1 - sum(a_mi))
       a1 <- integer(block_size); a0 <- integer(block_size); idx <- 1L
       for (j in 1:block_size) {
@@ -141,44 +142,36 @@ compute_truth <- function(exact_psi) {
     }
   }
   ATE_i <- DE_i + IE_i
-  # Network-level averages (average over all 20 units = average over 4 block
-  # positions, since all 5 blocks are identical).
   list(DE = mean(DE_i), IE = mean(IE_i), ATE = mean(ATE_i))
 }
 
 ## ============================================================================
-## GIBBS SAMPLER — N = 20
+## GIBBS SAMPLER — takes a fixed allocation, returns psi_hat for all N units
 ## ============================================================================
 
 make_gibbs_psi <- function(spec, weights) {
   W_int <- weights$W_int; wY <- weights$wY
 
-  # Precompute neighbor lists in GLOBAL indexing (length-N)
   global_nbr_dep <- vector("list", N)
   global_nbr_int <- vector("list", N)
   for (b in 1:n_blocks) {
     for (lp in 1:block_size) {
-      u <- in_block[lp, b]
-      # Map local neighbor indices -> global
+      u  <- in_block[lp, b]
       nd <- spec$nbr_dep[[lp]]
       ni <- spec$nbr_int[[lp]]
       global_nbr_dep[[u]] <- if (length(nd) > 0) in_block[nd, b] else integer(0)
       global_nbr_int[[u]] <- if (length(ni) > 0) in_block[ni, b] else integer(0)
     }
   }
-  # Precompute local-index maps so we can look up W_int and wY rows/cols
-  local_pos <- rep(1:block_size, times = n_blocks)
 
-  function(a_alloc, n_iter, burn_in, seed) {
-    set.seed(seed)
+  function(a_alloc, n_iter, burn_in) {
     L <- integer(N); Y <- integer(N)
     acc <- numeric(N); kept <- 0L
     for (m in 1:n_iter) {
       for (u in 1:N) {
-        lp_u   <- local_pos[u]
-        nb_dep <- global_nbr_dep[[u]]
-        nb_int <- global_nbr_int[[u]]
-        # Local positions of neighbors (for indexing W_int / wY)
+        lp_u      <- local_pos[u]
+        nb_dep    <- global_nbr_dep[[u]]
+        nb_int    <- global_nbr_int[[u]]
         nb_dep_lp <- local_pos[nb_dep]
         nb_int_lp <- local_pos[nb_int]
 
@@ -201,51 +194,47 @@ make_gibbs_psi <- function(spec, weights) {
 }
 
 ## ============================================================================
-## ONE REPLICATE
+## ONE REPLICATE — SAMPLED-ALLOCATION ESTIMATOR
 ## ============================================================================
 
 make_one_replicate <- function(gibbs_psi) {
   function(run_id) {
-    base_seed <- 10000L + run_id * 100L
-    # psi_tbl[k, lp] = ψ̂ for a unit at local position lp when its block's
-    # local allocation is the k-th row of block_cfg.
-    psi_tbl <- matrix(NA_real_, nrow = nrow(block_cfg), ncol = block_size)
-    for (k in seq_len(nrow(block_cfg))) {
-      local_a <- as.integer(block_cfg[k, ])
-      # Replicate same local allocation across all 5 blocks
-      a_vec   <- rep(local_a, times = n_blocks)  # length 20
-      psi_full <- gibbs_psi(a_vec, n_iter, burn_in, seed = base_seed + k)
-      # Average the 5 replicates at each local position
-      # (each block is independent, so this averaging is variance reduction)
-      psi_avg <- numeric(block_size)
-      for (lp in 1:block_size) {
-        psi_avg[lp] <- mean(psi_full[in_block[lp, ]])
-      }
-      psi_tbl[k, ] <- psi_avg
-    }
-    # Build DE_i, IE_i using block_cfg lookup
-    key_fn <- function(v) paste0(v, collapse = "")
-    cfg_keys <- apply(block_cfg, 1, key_fn)
-    psi0_key <- key_fn(rep(0L, block_size))
-    psi0_row <- which(cfg_keys == psi0_key)
+    set.seed(10000L + run_id * 100L)
 
-    DE_i <- numeric(block_size); IE_i <- numeric(block_size)
-    for (i in 1:block_size) {
-      psi_base <- psi_tbl[psi0_row, i]
-      for (k in seq_len(nrow(other_cfg))) {
-        a_mi <- as.integer(other_cfg[k, ])
-        pa <- alpha^sum(a_mi) * (1 - alpha)^(block_size - 1 - sum(a_mi))
-        a1 <- integer(block_size); a0 <- integer(block_size); idx <- 1L
-        for (j in 1:block_size) if (j != i) {
-          a1[j] <- a_mi[idx]; a0[j] <- a_mi[idx]; idx <- idx + 1L
+    # Baseline: psi_hat_i(a = 0) for IE, one Gibbs run
+    psi_zero <- gibbs_psi(integer(N), n_iter, burn_in)
+
+    DE_i <- numeric(N)
+    IE_i <- numeric(N)
+
+    for (i in 1:N) {
+      diffs_DE <- numeric(K_alloc)
+      psi_0_samples <- numeric(K_alloc)
+
+      for (k in 1:K_alloc) {
+        a_mi <- as.integer(rbinom(N - 1, size = 1, prob = alpha))
+
+        a1 <- integer(N); a0 <- integer(N)
+        idx <- 1L
+        for (j in 1:N) {
+          if (j != i) {
+            a1[j] <- a_mi[idx]; a0[j] <- a_mi[idx]
+            idx <- idx + 1L
+          }
         }
         a1[i] <- 1L; a0[i] <- 0L
-        r1 <- which(cfg_keys == key_fn(a1))
-        r0 <- which(cfg_keys == key_fn(a0))
-        DE_i[i] <- DE_i[i] + pa * (psi_tbl[r1, i] - psi_tbl[r0, i])
-        IE_i[i] <- IE_i[i] + pa * (psi_tbl[r0, i] - psi_base)
+
+        psi_hat_1 <- gibbs_psi(a1, n_iter, burn_in)[i]
+        psi_hat_0 <- gibbs_psi(a0, n_iter, burn_in)[i]
+
+        diffs_DE[k]      <- psi_hat_1 - psi_hat_0
+        psi_0_samples[k] <- psi_hat_0
       }
+
+      DE_i[i] <- mean(diffs_DE)
+      IE_i[i] <- mean(psi_0_samples) - psi_zero[i]
     }
+
     ATE_i <- DE_i + IE_i
     c(DE = mean(DE_i), IE = mean(IE_i), ATE = mean(ATE_i))
   }
@@ -257,7 +246,7 @@ make_one_replicate <- function(gibbs_psi) {
 
 run_model <- function(model_name) {
   cat("==================================================\n")
-  cat(sprintf("===  Model: %s   (N = %d, %d blocks × %d)\n",
+  cat(sprintf("===  Model: %s   (N = %d, %d blocks x %d)\n",
               model_name, N, n_blocks, block_size))
   cat("==================================================\n")
 
@@ -285,12 +274,11 @@ run_model <- function(model_name) {
   } else {
     cl <- makeCluster(n_cores)
     clusterExport(cl,
-                  varlist = c("N", "n_blocks", "block_size", "in_block",
+                  varlist = c("N", "n_blocks", "block_size", "in_block", "local_pos",
                               "spec", "weights",
                               "beta0", "beta1", "beta2", "beta3", "beta4",
                               "theta", "eta", "omega", "alpha",
-                              "n_iter", "burn_in",
-                              "block_cfg", "other_cfg",
+                              "n_iter", "burn_in", "K_alloc",
                               "logistic", "gibbs_psi", "one_replicate"),
                   envir = environment())
     results_list <- parLapply(cl, 1:n_runs, one_replicate)
@@ -327,6 +315,16 @@ run_model <- function(model_name) {
 ## ============================================================================
 ## MAIN
 ## ============================================================================
+
+cat(sprintf("Simulation settings:\n"))
+cat(sprintf("  n_iter       = %d\n", n_iter))
+cat(sprintf("  burn_in      = %d\n", burn_in))
+cat(sprintf("  K_alloc      = %d\n", K_alloc))
+cat(sprintf("  n_runs       = %d\n", n_runs))
+cat(sprintf("  Gibbs runs per replicate = %d\n",
+            2L * K_alloc * N + 1L))
+cat(sprintf("  Total Gibbs runs (3 models) = %d\n\n",
+            3L * n_runs * (2L * K_alloc * N + 1L)))
 
 all_results <- list()
 for (m in c("CGa", "CGb", "CGc")) {
