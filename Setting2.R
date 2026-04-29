@@ -4,6 +4,8 @@
 # Gibbs samplers fit CG(a) and CG(b).
 ###############################################################################
 
+library(parallel)
+
 ## ============================================================================
 ## NETWORK SIZE
 ## ============================================================================
@@ -24,13 +26,14 @@ eta   <- -0.5
 omega <-  0.42
 alpha <- 0.5
 
-n_iter  <- 5000L
-burn_in <- 1000L
-n_runs  <- 500L
+n_iter  <- 2000L   
+burn_in <- 500L
+n_runs  <- 200L
+K_alloc <- 50L    
 
 logistic <- function(x) 1 / (1 + exp(-x))
 
-# All 2^4 configs of a block, and 2^3 "other" configs
+# All 2^4 block configs (used only for exact-truth computation)
 block_cfg <- as.matrix(expand.grid(rep(list(0:1), block_size)))
 colnames(block_cfg) <- paste0("v", 1:block_size)
 other_cfg <- as.matrix(expand.grid(rep(list(0:1), block_size - 1)))
@@ -72,7 +75,7 @@ build_weights <- function(spec) {
 }
 
 ## ============================================================================
-## EXACT (ANALYTICAL) COMPONENTS — PER BLOCK
+## EXACT (ANALYTICAL) TRUTH — PER BLOCK (unchanged from enumeration version)
 ## ============================================================================
 
 make_exact_funcs <- function(spec, weights) {
@@ -141,7 +144,7 @@ compute_truth <- function(exact_psi) {
 }
 
 ## ============================================================================
-## GIBBS SAMPLER — N = 20
+## GIBBS SAMPLER — takes a fixed allocation, returns psi_hat for all N units
 ## ============================================================================
 
 make_gibbs_psi <- function(spec, weights) {
@@ -160,8 +163,7 @@ make_gibbs_psi <- function(spec, weights) {
     }
   }
 
-  function(a_alloc, n_iter, burn_in, seed) {
-    set.seed(seed)
+  function(a_alloc, n_iter, burn_in) {
     L <- integer(N); Y <- integer(N)
     acc <- numeric(N); kept <- 0L
     for (m in 1:n_iter) {
@@ -191,44 +193,49 @@ make_gibbs_psi <- function(spec, weights) {
 }
 
 ## ============================================================================
-## ONE REPLICATE — 16 chains per replicate using block replication
+## ONE REPLICATE — SAMPLED-ALLOCATION ESTIMATOR
 ## ============================================================================
 
 make_one_replicate <- function(gibbs_psi) {
   function(run_id) {
-    base_seed <- 10000L + run_id * 100L
-    psi_tbl <- matrix(NA_real_, nrow = nrow(block_cfg), ncol = block_size)
-    for (k in seq_len(nrow(block_cfg))) {
-      local_a  <- as.integer(block_cfg[k, ])
-      a_vec    <- rep(local_a, times = n_blocks)  # length 20
-      psi_full <- gibbs_psi(a_vec, n_iter, burn_in, seed = base_seed + k)
-      for (lp in 1:block_size) {
-        psi_tbl[k, lp] <- mean(psi_full[in_block[lp, ]])
-      }
-    }
+    set.seed(10000L + run_id * 100L)
 
-    # Build DE_i, IE_i using block_cfg lookup
-    key_fn   <- function(v) paste0(v, collapse = "")
-    cfg_keys <- apply(block_cfg, 1, key_fn)
-    psi0_row <- which(cfg_keys == key_fn(rep(0L, block_size)))
+    # --- Baseline: psi_hat_i(a = 0) for IE, one Gibbs run ---
+    psi_zero <- gibbs_psi(integer(N), n_iter, burn_in)  # length N
 
-    DE_i <- numeric(block_size); IE_i <- numeric(block_size)
-    for (i in 1:block_size) {
-      psi_base <- psi_tbl[psi0_row, i]
-      for (k in seq_len(nrow(other_cfg))) {
-        a_mi <- as.integer(other_cfg[k, ])
-        pa <- alpha^sum(a_mi) * (1 - alpha)^(block_size - 1 - sum(a_mi))
-        a1 <- integer(block_size); a0 <- integer(block_size); idx <- 1L
-        for (j in 1:block_size) if (j != i) {
-          a1[j] <- a_mi[idx]; a0[j] <- a_mi[idx]; idx <- idx + 1L
+    # --- For each unit i, K sampled allocations ---
+    DE_i <- numeric(N)
+    IE_i <- numeric(N)
+
+    for (i in 1:N) {
+      diffs_DE <- numeric(K_alloc)
+      psi_0_samples <- numeric(K_alloc)
+
+      for (k in 1:K_alloc) {
+        a_mi <- as.integer(rbinom(N - 1, size = 1, prob = alpha))
+
+        # Build a^{(k,1)} and a^{(k,0)}
+        a1 <- integer(N); a0 <- integer(N)
+        idx <- 1L
+        for (j in 1:N) {
+          if (j != i) {
+            a1[j] <- a_mi[idx]; a0[j] <- a_mi[idx]
+            idx <- idx + 1L
+          }
         }
         a1[i] <- 1L; a0[i] <- 0L
-        r1 <- which(cfg_keys == key_fn(a1))
-        r0 <- which(cfg_keys == key_fn(a0))
-        DE_i[i] <- DE_i[i] + pa * (psi_tbl[r1, i] - psi_tbl[r0, i])
-        IE_i[i] <- IE_i[i] + pa * (psi_tbl[r0, i] - psi_base)
+
+        psi_hat_1 <- gibbs_psi(a1, n_iter, burn_in)[i]
+        psi_hat_0 <- gibbs_psi(a0, n_iter, burn_in)[i]
+
+        diffs_DE[k]      <- psi_hat_1 - psi_hat_0
+        psi_0_samples[k] <- psi_hat_0
       }
+
+      DE_i[i] <- mean(diffs_DE)
+      IE_i[i] <- mean(psi_0_samples) - psi_zero[i]
     }
+
     ATE_i <- DE_i + IE_i
     c(DE = mean(DE_i), IE = mean(IE_i), ATE = mean(ATE_i))
   }
@@ -239,7 +246,7 @@ make_one_replicate <- function(gibbs_psi) {
 ## ============================================================================
 
 cat("==================================================\n")
-cat(sprintf("=== Truth under CG(c)  (N = %d, %d × %d blocks)\n",
+cat(sprintf("=== Truth under CG(c)  (N = %d, %d x %d blocks)\n",
             N, n_blocks, block_size))
 cat("==================================================\n")
 truth_spec    <- specs$CGc
@@ -249,6 +256,16 @@ truth         <- compute_truth(truth_exact$exact_psi)
 cat(sprintf("  DE_true  = %+.6f\n", truth$DE))
 cat(sprintf("  IE_true  = %+.6f\n", truth$IE))
 cat(sprintf("  ATE_true = %+.6f\n\n", truth$ATE))
+
+cat(sprintf("Simulation settings:\n"))
+cat(sprintf("  n_iter       = %d\n", n_iter))
+cat(sprintf("  burn_in      = %d\n", burn_in))
+cat(sprintf("  K_alloc      = %d\n", K_alloc))
+cat(sprintf("  n_runs       = %d\n", n_runs))
+cat(sprintf("  Gibbs runs per replicate = %d\n",
+            2L * K_alloc * N + 1L))
+cat(sprintf("  Total Gibbs runs (both misspec)  = %d\n\n",
+            2L * n_runs * (2L * K_alloc * N + 1L)))
 
 ## ============================================================================
 ## RUN A MISSPECIFIED SAMPLER
@@ -280,8 +297,7 @@ run_misspec <- function(fit_model_name, truth) {
                               "spec", "weights",
                               "beta0", "beta1", "beta2", "beta3", "beta4",
                               "theta", "eta", "omega", "alpha",
-                              "n_iter", "burn_in",
-                              "block_cfg", "other_cfg",
+                              "n_iter", "burn_in", "K_alloc",
                               "logistic", "gibbs_psi", "one_replicate"),
                   envir = environment())
     results_list <- parLapply(cl, 1:n_runs, one_replicate)
