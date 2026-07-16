@@ -1,0 +1,27 @@
+# MultiNetCausalRcpp Study 1 (N=20) run settings
+timestamp: 2026-06-28 22:37:29 EDT
+out_dir: results/final_study1_N20
+
+[configuration]
+N: 20
+S: 500
+K: 50
+m_star: 20
+alpha: 0.5
+seed: 123
+dgp_burn: 1500
+dgp_parallel: TRUE
+
+[true_parameters]
+beta0: -1.5
+beta1: 0.6
+beta2: 0.3
+beta3: 0.4
+beta4: 0.4
+theta: 1.2
+lambda0: -0.5
+omega: 1.2
+gamma0: -0.2
+rho: 0.3
+gamma1: 0.3
+eta: 1.2

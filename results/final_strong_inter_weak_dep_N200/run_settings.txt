@@ -1,0 +1,40 @@
+# MultiNetCausalRcpp run settings
+timestamp: 2026-07-03 12:03:53 EDT
+out_dir: results/final_strong_inter_weak_dep_N200
+
+[configuration]
+N: 200
+S: 500
+dep_deg_input: 4
+int_deg_input: 1
+dgp_burn: 1500
+dgp_parallel: TRUE
+dgp_n_cores: 23
+alpha: 0.5
+K: 50
+m_star: 20
+base_seed_network: 123
+seed_reps_CGa: 1
+seed_reps_CGb: 2
+seed_reps_CGc: 3
+
+[true_parameters]
+beta0: -1.5
+beta1: 0.8
+beta2: 0.3
+beta3: 0.9
+beta4: 0.3
+theta: 0.1
+lambda0: -0.5
+omega: 0.1
+gamma0: -0.2
+rho: 0.3
+gamma1: 0.1
+eta: 0.1
+
+[realized_base_network]
+base_int_deg: 0.940000
+base_aux_deg: 3.740000
+base_aux_only_deg: 3.730000
+base_dep_deg: 4.670000
+frac_isolated_int: 0.395000

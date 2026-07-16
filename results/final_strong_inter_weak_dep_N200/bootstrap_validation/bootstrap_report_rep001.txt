@@ -1,0 +1,27 @@
+Bootstrap validation for CGc rep 1
+B = 200, bootstrap successes = 200
+
+ estimand  point  truth boot_mean    boot_sd      q025    q50      q975
+       DE 0.1181 0.1677  0.112040 0.06815670 -0.012575 0.1089 0.2318675
+       IE 0.0723 0.1138  0.055465 0.03735033 -0.013715 0.0556 0.1271100
+      ATE 0.1904 0.2815  0.167505 0.08174545  0.004750 0.1722 0.3074625
+ cover_truth cover_point bootstrap_successes   B rep_index boot_dgp_burn alpha
+           1           1                 200 200         1          1500   0.5
+           1           1                 200 200         1          1500   0.5
+           1           1                 200 200         1          1500   0.5
+  K m_star mc_sd_reference boot_to_mc_sd_ratio
+ 50     20      0.06564456            1.038269
+ 50     20      0.03715788            1.005179
+ 50     20      0.07402688            1.104267
+
+Observed point estimate (PL):
+    DE     IE    ATE 
+0.1181 0.0723 0.1904 
+
+True-parameter effect on same observed L (recomputed):
+    DE     IE    ATE 
+0.1753 0.1140 0.2893 
+
+Truth row from causal_reps.csv (TE used as ATE truth):
+     DE     IE    ATE
+ 0.1677 0.1138 0.2815
