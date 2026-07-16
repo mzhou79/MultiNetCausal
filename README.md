@@ -4,15 +4,15 @@ This repository contains the code that can reproduce the simulation result of th
 
 ## `R/`
 
-- `utils.R` defines the five-network-role data structure and shared helpers.\
-- `estimation.R` implements the pseudo-likelihood fit of the covariate, treatment, and outcome full conditionals.\
-- `causal.R` implements the Gibbs-sampler auto-g-computation algorithm (Algorithm 1) that produces the DE/IE/ATE estimates.\
+- `utils.R` defines the five-network-role data structure and shared helpers.
+- `estimation.R` implements the pseudo-likelihood fit of the covariate, treatment, and outcome full conditionals.
+- `causal.R` implements the Gibbs-sampler auto-g-computation algorithm (Algorithm 1) that produces the DE/IE/ATE estimates.
 - `bootstrap.R` implements the fixed-network parametric bootstrap used for uncertainty quantification.
 
 ## `simulation/`
 
-- `run_study1_block.R` reproduces Study 1 (the N = 20 four-unit block network).\
-- `run_study2_random_network.R` reproduces Study 2 (the N = 200 random-network design).\
+- `run_study1_block.R` reproduces Study 1 (the N = 20 four-unit block network).
+- `run_study2_random_network.R` reproduces Study 2 (the N = 200 random-network design).
 - `sim_utils.R` holds the shared data-generating and evaluation utilities used by both.
 
 ## `results/`
